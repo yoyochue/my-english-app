@@ -19,7 +19,6 @@ def init_db():
         )
     ''')
     
-    # 如果資料庫是空的，自動嘗試讀取 CSV
     c.execute('SELECT count(*) FROM vocab')
     if c.fetchone()[0] == 0:
         load_csv_to_db(conn)
@@ -28,7 +27,6 @@ def init_db():
     conn.close()
 
 def load_csv_to_db(conn=None):
-    """讀取本地的 vocabulary.csv 檔案"""
     should_close = False
     if conn is None:
         conn = sqlite3.connect('english_data.db')
@@ -36,15 +34,12 @@ def load_csv_to_db(conn=None):
     
     c = conn.cursor()
     
-    # 檢查檔案是否存在
     if os.path.exists('vocabulary.csv'):
         try:
             new_data = []
-            # 使用 utf-8 讀取，並手動切割確保格式正確
             with open('vocabulary.csv', 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
-            # 判斷是否要跳過標題 (如果第一行有 word 這個字)
             start_idx = 0
             if len(lines) > 0 and 'word' in lines[0].lower():
                 start_idx = 1
@@ -53,19 +48,17 @@ def load_csv_to_db(conn=None):
                 line = line.strip()
                 if not line: continue
                 
-                # 只切前兩個逗號 (word, meaning, example...)
                 parts = line.split(',', 2)
                 
                 if len(parts) >= 3:
                     w = parts[0].strip()
                     m = parts[1].strip()
-                    e = parts[2].strip().strip('"') # 去除可能存在的引號
+                    e = parts[2].strip().strip('"')
                     new_data.append((w, m, e))
                 elif len(parts) == 2:
                     new_data.append((parts[0].strip(), parts[1].strip(), ""))
 
             if new_data:
-                # 重新匯入前清空舊資料 (根據你的需求，這樣才能同步 CSV 修改)
                 c.execute('DELETE FROM vocab')
                 c.executemany('INSERT INTO vocab (word, meaning, example, status) VALUES (?, ?, ?, 0)', new_data)
                 conn.commit()
@@ -76,7 +69,7 @@ def load_csv_to_db(conn=None):
         except Exception as e:
             st.error(f"讀取 CSV 發生錯誤: {e}")
     else:
-        st.error("❌ 找不到 vocabulary.csv！請確認檔案放在同一個資料夾。")
+        st.error("❌ 找不到 vocabulary.csv！")
 
     if should_close:
         conn.close()
@@ -97,11 +90,11 @@ def update_status(word_id, new_status):
     conn.commit()
     conn.close()
 
-# --- App 介面設定 (手機版優化) ---
+# --- App 介面設定 ---
 st.set_page_config(page_title="英文隨身練 (CSV版)", layout="centered")
 init_db()
 
-st.title("📱 英文隨身練 (CSV版)")
+st.title("📱 英文隨身練")
 
 # 側邊選單
 menu = ["🧠 抽卡模式", "🧩 連連看配對", "📊 單字列表", "🔄 重新讀取 CSV"]
@@ -110,8 +103,6 @@ choice = st.sidebar.selectbox("選單", menu)
 # --- 功能 1: 抽卡模式 ---
 if choice == "🧠 抽卡模式":
     st.header("🔥 單字記憶卡")
-    
-    # 讀取未背熟 (status=0) 的單字
     df = get_words(0)
     
     if not df.empty:
@@ -123,7 +114,6 @@ if choice == "🧠 抽卡模式":
         
         word = st.session_state.current_word_data
         
-        # 大字體卡片區
         st.markdown(f"""
         <div style="padding:30px; background:#e3f2fd; border-radius:15px; text-align:center; margin-bottom:20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
             <h2 style="color:#1565c0; font-size: 36px; margin:0;">{word['word']}</h2>
@@ -157,31 +147,45 @@ if choice == "🧠 抽卡模式":
     else:
         st.balloons()
         st.success("太棒了！所有單字都背完了！")
-        st.info("如果想重新練習，請去「重新讀取 CSV」。")
 
-# --- 功能 2: 連連看配對 ---
+# --- 功能 2: 連連看配對 (已修正邏輯) ---
 elif choice == "🧩 連連看配對":
     st.header("🧩 單字配對挑戰")
     
+    # 初始化題目：只有當 session_state 裡沒有題目時，才去抓新題目
+    # 這樣就算按下送出，因為 'quiz_data' 還在，所以不會換題目
     if 'quiz_data' not in st.session_state:
         df = get_words()
-        # 至少要有 5 個單字才能玩
         if len(df) < 5:
             st.warning(f"單字量不足 (目前只有 {len(df)} 個)，請先在 CSV 加入至少 5 個單字。")
         else:
+            # 隨機選 5 個字並存入 session_state
             quiz_df = df.sample(5)
+            st.session_state.quiz_data = quiz_df
             st.session_state.quiz_correct_pairs = dict(zip(quiz_df['word'], quiz_df['meaning']))
-            st.session_state.quiz_words = quiz_df['word'].tolist()
+            
+            # 準備選項
             options = quiz_df['meaning'].tolist()
             random.shuffle(options)
             st.session_state.quiz_options = ["請選擇..."] + options
+            
+            # 狀態標記：是否已送出答案
             st.session_state.quiz_submitted = False
 
-    if 'quiz_words' in st.session_state:
-        user_answers = {}
+    # 確保有題目才顯示
+    if 'quiz_data' in st.session_state:
+        quiz_df = st.session_state.quiz_data
+        
+        # 使用 Form 表單
         with st.form("matching_game"):
-            for word in st.session_state.quiz_words:
-                st.markdown(f"**{word}**")
+            st.write("請為下列單字選擇正確的中文意思：")
+            
+            # 這裡用來暫存使用者的選擇
+            user_answers = {}
+            
+            for index, row in quiz_df.iterrows():
+                word = row['word']
+                st.markdown(f"### **{word}**")
                 user_answers[word] = st.selectbox(
                     f"選擇意思:", 
                     st.session_state.quiz_options, 
@@ -190,25 +194,42 @@ elif choice == "🧩 連連看配對":
                 )
                 st.markdown("---")
             
-            submitted = st.form_submit_button("送出檢查", use_container_width=True, type="primary")
+            # 送出按鈕
+            submitted = st.form_submit_button("📝 送出檢查", use_container_width=True, type="primary")
 
+        # --- 判斷邏輯 ---
         if submitted:
+            st.session_state.quiz_submitted = True
+        
+        # 如果已經送出過，就顯示結果與「下一局」按鈕
+        if st.session_state.get('quiz_submitted'):
+            st.write("### 📊 答題結果")
             score = 0
-            st.write("### 📝 結果：")
+            
+            # 顯示對錯
             for word, user_ans in user_answers.items():
-                correct = st.session_state.quiz_correct_pairs[word]
-                if user_ans == correct:
-                    st.success(f"✅ {word}")
+                correct_ans = st.session_state.quiz_correct_pairs[word]
+                if user_ans == correct_ans:
+                    st.success(f"✅ **{word}**：答對了！")
                     score += 1
                 else:
-                    st.error(f"❌ {word} (正解: {correct})")
+                    st.error(f"❌ **{word}**：答錯了 (正確答案是：{correct_ans})")
             
             if score == 5:
                 st.balloons()
-                st.markdown("### 💯 全對！")
-            
-            if st.button("🔄 再玩一局", use_container_width=True):
+                st.markdown("### 💯 全對！太強了！")
+            else:
+                st.markdown(f"### 得分：{score} / 5")
+
+            st.markdown("---")
+            # 按下這個按鈕，才清除舊題目，重新一局
+            if st.button("🔄 繼續作答 (下一局)", use_container_width=True, type="primary"):
                 del st.session_state.quiz_data
+                del st.session_state.quiz_submitted
+                # 清除 selectbox 的快取 key，確保下一題選項會重置
+                for key in list(st.session_state.keys()):
+                    if key.startswith("q_"):
+                        del st.session_state[key]
                 st.rerun()
 
 # --- 功能 3: 單字列表 ---
@@ -221,6 +242,5 @@ elif choice == "📊 單字列表":
 # --- 功能 4: 重新讀取 CSV ---
 elif choice == "🔄 重新讀取 CSV":
     st.header("資料庫同步")
-    st.info("如果你剛剛修改了 CSV 檔案，請點下面的按鈕來更新 App。")
     if st.button("📥 重新載入 CSV 資料", type="primary", use_container_width=True):
         load_csv_to_db()
