@@ -91,7 +91,7 @@ def update_status(word_id, new_status):
     conn.close()
 
 # --- App 介面設定 ---
-st.set_page_config(page_title="英文隨身練 (CSV版)", layout="centered")
+st.set_page_config(page_title="英文隨身練 小多拉拉", layout="centered")
 init_db()
 
 st.title("📱 英文隨身練")
